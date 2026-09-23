@@ -19,7 +19,7 @@ export class CryptoService {
 
   async initializeKeyFile(password: string): Promise<KeyFileData> {
     const salt = crypto.getRandomValues(new Uint8Array(SALT_LENGTH));
-    const wrappingKey = await this.deriveKey(password, salt);
+    const wrappingKey = await this.deriveKey(password, salt.buffer);
 
     const masterKey = await crypto.subtle.generateKey(
       { name: 'AES-GCM', length: KEY_LENGTH },
@@ -66,8 +66,8 @@ export class CryptoService {
 
     try {
       this.masterKey = await crypto.subtle.unwrapKey(
-        'raw', wrappedKey.buffer as ArrayBuffer, wrappingKey,
-        { name: 'AES-GCM', iv: iv.buffer as ArrayBuffer },
+        'raw', wrappedKey, wrappingKey,
+        { name: 'AES-GCM', iv },
         { name: 'AES-GCM', length: KEY_LENGTH },
         false,
         ['encrypt', 'decrypt']
@@ -91,8 +91,8 @@ export class CryptoService {
     let extractableKey: CryptoKey;
     try {
       extractableKey = await crypto.subtle.unwrapKey(
-        'raw', oldWrapped.buffer as ArrayBuffer, oldWrappingKey,
-        { name: 'AES-GCM', iv: oldIv.buffer as ArrayBuffer },
+        'raw', oldWrapped, oldWrappingKey,
+        { name: 'AES-GCM', iv: oldIv },
         { name: 'AES-GCM', length: KEY_LENGTH },
         true,
         ['encrypt', 'decrypt']
@@ -103,7 +103,7 @@ export class CryptoService {
 
     // Wrap with new password
     const newSalt = crypto.getRandomValues(new Uint8Array(SALT_LENGTH));
-    const newWrappingKey = await this.deriveKey(newPassword, newSalt);
+    const newWrappingKey = await this.deriveKey(newPassword, newSalt.buffer);
     const newIv = crypto.getRandomValues(new Uint8Array(IV_LENGTH));
     const newWrapped = await crypto.subtle.wrapKey(
       'raw', extractableKey, newWrappingKey, { name: 'AES-GCM', iv: newIv }
@@ -181,7 +181,7 @@ export class CryptoService {
 
   private async deriveKey(
     password: string,
-    salt: Uint8Array,
+    salt: ArrayBuffer,
     iterations: number = PBKDF2_ITERATIONS
   ): Promise<CryptoKey> {
     const passwordKey = await crypto.subtle.importKey(
@@ -193,7 +193,7 @@ export class CryptoService {
     );
 
     return crypto.subtle.deriveKey(
-      { name: 'PBKDF2', salt: salt.buffer as ArrayBuffer, iterations, hash: 'SHA-256' },
+      { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
       passwordKey,
       { name: 'AES-GCM', length: KEY_LENGTH },
       false,
@@ -209,13 +209,13 @@ export class CryptoService {
     return btoa(binary);
   }
 
-  private base64ToBuffer(base64: string): Uint8Array {
+  private base64ToBuffer(base64: string): ArrayBuffer {
     const binary = atob(base64);
     const buffer = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) {
       buffer[i] = binary.charCodeAt(i);
     }
-    return buffer;
+    return buffer.buffer;
   }
 
   private bufferToHex(buffer: Uint8Array): string {

@@ -64,6 +64,7 @@ export default class E2EGDriveSyncPlugin extends Plugin {
       name: 'Lock encryption',
       callback: () => {
         this.cryptoService.lock();
+        this.sessionPassword = '';
         this.updateStatusBar();
         new Notice('Master key locked');
       },
@@ -79,6 +80,7 @@ export default class E2EGDriveSyncPlugin extends Plugin {
   onunload() {
     this.clearAutoSync();
     this.cryptoService.lock();
+    this.sessionPassword = '';
   }
 
   async loadSettings() {
@@ -93,6 +95,7 @@ export default class E2EGDriveSyncPlugin extends Plugin {
     await this.saveData(this.settings);
     this.syncEngine?.updateSettings(this.settings);
     this.driveClient?.updateSettings(this.settings);
+    if (!this.syncEngine?.isSyncing()) this.updateStatusBar();
   }
 
   rememberSessionPassword(password: string): void {

@@ -1,4 +1,5 @@
 import { requestUrl } from 'obsidian';
+import { createServer } from 'node:http';
 import { DriveFile, PluginSettings } from './types';
 
 interface TokenResponse {
@@ -42,7 +43,6 @@ export class GoogleDriveClient {
   // --- OAuth 2.0 with loopback redirect ---
 
   async authorize(): Promise<void> {
-    const http = await import('http');
     const randomHex = (length: number) => Array.from(
       crypto.getRandomValues(new Uint8Array(length)),
       byte => byte.toString(16).padStart(2, '0')
@@ -56,18 +56,19 @@ export class GoogleDriveClient {
     return new Promise((resolve, reject) => {
       let finished = false;
       let exchanging = false;
-      let timer: ReturnType<typeof setTimeout>;
+      let timer: number | undefined;
       const finish = (error?: Error) => {
         if (finished) return;
         finished = true;
-        clearTimeout(timer);
+        if (timer !== undefined) window.clearTimeout(timer);
         if (server.listening) server.close();
         if (error) reject(error);
         else resolve();
       };
 
-      const server = http.createServer((req, res) => {
-        if (finished || exchanging || !req.url) {
+      const server = createServer((req, res) => {
+        const requestUrl = req.url;
+        if (finished || exchanging || !requestUrl) {
           res.writeHead(400, { 'Content-Type': 'text/plain' });
           res.end('Invalid request');
           return;
@@ -75,7 +76,7 @@ export class GoogleDriveClient {
 
         void (async () => {
           try {
-            const url = new URL(req.url!, 'http://127.0.0.1');
+            const url = new URL(requestUrl, 'http://127.0.0.1');
             if (url.pathname !== '/' || url.searchParams.get('state') !== state) {
               res.writeHead(400, { 'Content-Type': 'text/plain' });
               res.end('Invalid OAuth state');
@@ -98,8 +99,7 @@ export class GoogleDriveClient {
             }
 
             exchanging = true;
-            const port = (server.address() as { port: number }).port;
-            const tokens = await this.exchangeCode(code, `http://127.0.0.1:${port}`, verifier);
+            const tokens = await this.exchangeCode(code, redirectUri(), verifier);
             if (finished) return;
 
             await this.onTokenUpdate({
@@ -122,12 +122,18 @@ export class GoogleDriveClient {
         })();
       });
 
+      const redirectUri = (): string => {
+        const address = server.address();
+        if (!address || typeof address === 'string') {
+          throw new Error('Authorization callback server is not listening');
+        }
+        return `http://127.0.0.1:${address.port}`;
+      };
       server.on('error', (error) => finish(error));
       server.listen(0, '127.0.0.1', () => {
-        const port = (server.address() as { port: number }).port;
         const params = new URLSearchParams({
           client_id: this.settings.googleClientId,
-          redirect_uri: `http://127.0.0.1:${port}`,
+          redirect_uri: redirectUri(),
           response_type: 'code',
           scope: SCOPE,
           access_type: 'offline',
@@ -143,7 +149,7 @@ export class GoogleDriveClient {
         }
       });
 
-      timer = setTimeout(() => finish(new Error('OAuth timeout — no response within 5 minutes')), 300000);
+      timer = window.setTimeout(() => finish(new Error('OAuth timeout — no response within 5 minutes')), 300000);
     });
   }
 

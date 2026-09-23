@@ -192,6 +192,8 @@ test('OAuth loopback rejects wrong state and exchanges a PKCE-bound code', async
   let opened;
   let invalidStatus;
   globalThis.window = {
+    setTimeout,
+    clearTimeout,
     open: (url) => {
       opened = new URL(url);
       const redirect = new URL(opened.searchParams.get('redirect_uri'));

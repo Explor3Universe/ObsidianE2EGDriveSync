@@ -15,8 +15,5 @@ export default defineConfig([
         ...globals.node,
       },
     },
-    rules: {
-      "obsidianmd/sample-names": "off",
-    },
   },
 ]);

@@ -1,8 +1,17 @@
 # Encrypted Google Drive Sync
 
-Syncs your vault with Google Drive, encrypting all data with AES-256 before upload and storing keys exclusively on your device.
+Sync file contents with Google Drive using AES-256-GCM encryption, with encryption keys kept on your device.
+
+Requires **Obsidian 1.13.0 or later on desktop**. Settings are indexed by Obsidian's global settings search.
 
 This plugin needs your own Google account and a Google Cloud OAuth client. It sends authorization and encrypted file data only to Google (`accounts.google.com`, `oauth2.googleapis.com`, and `www.googleapis.com`). It does not upload your vault to any other server.
+
+## Access and privacy
+
+- Synchronization enumerates the vault's note and attachment paths to find changes, then reads non-excluded files for hashing and encryption. This is required to sync the whole vault. Runs are manual unless you enable auto-sync.
+- File **contents** are encrypted. Filenames, folder structure, encrypted file sizes, and modification times remain visible to Google Drive.
+- Vault configuration, trash, and Git metadata are excluded. Additional exclusions are available in the plugin's settings.
+- Authorization uses a temporary server bound to `127.0.0.1`, protected by OAuth state and PKCE. No telemetry is collected.
 
 ## Features
 
@@ -47,7 +56,7 @@ Each file is encrypted independently with a fresh IV. The master key never leave
 
 ### Upgrading a manually installed version 1.0.x
 
-Versions 1.1.x use the directory-compliant ID `encrypted-gdrive-sync`, and version 1.1.1 adopts the name **Encrypted Google Drive Sync**. The encrypted file format is unchanged.
+Version 1.1.0 and later use the directory-compliant ID `encrypted-gdrive-sync`, and version 1.1.1 adopts the name **Encrypted Google Drive Sync**. The encrypted file format is unchanged.
 
 1. Disable the old plugin and close Obsidian.
 2. Back up the old `e2e-gdrive-sync` plugin folder, including its `data.json`.
@@ -103,10 +112,14 @@ Deletion is intentionally not propagated: removing a file on one side restores i
 ## Building from source
 
 ```bash
-npm install
+npm ci
+npm run lint
+npm test
 npm run build      # production build
 npm run dev        # watch mode
 ```
+
+Tagged releases are built and tested in GitHub Actions. The workflow verifies the committed bundle and publishes signed artifact attestations for `main.js`, `manifest.json`, and `styles.css`.
 
 ## License
 

@@ -1,12 +1,12 @@
 import esbuild from "esbuild";
-import process from "process";
-import builtins from "builtin-modules";
+import process from "node:process";
+import { builtinModules } from "node:module";
 
 const prod = process.argv[2] === "production";
 
 const context = await esbuild.context({
   banner: {
-    js: "/* E2E Google Drive Sync - bundled by esbuild */",
+    js: "/* Encrypted Google Drive Sync - bundled by esbuild */",
   },
   entryPoints: ["src/main.ts"],
   bundle: true,
@@ -24,7 +24,8 @@ const context = await esbuild.context({
     "@lezer/common",
     "@lezer/highlight",
     "@lezer/lr",
-    ...builtins,
+    ...builtinModules,
+    "node:*",
   ],
   format: "cjs",
   target: "es2018",
@@ -37,7 +38,7 @@ const context = await esbuild.context({
 
 if (prod) {
   await context.rebuild();
-  process.exit(0);
+  await context.dispose();
 } else {
   await context.watch();
 }

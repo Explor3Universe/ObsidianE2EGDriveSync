@@ -1,0 +1,63 @@
+name: Verified release
+
+on:
+  push:
+    tags:
+      - '[0-9]*'
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Validate release version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node - <<'JS'
+          const assert = require('node:assert/strict');
+          const manifest = require('./manifest.json');
+          const pkg = require('./package.json');
+          const lock = require('./package-lock.json');
+          const versions = require('./versions.json');
+          assert.match(process.env.RELEASE_TAG, /^\d+\.\d+\.\d+$/);
+          assert.equal(manifest.version, process.env.RELEASE_TAG);
+          assert.equal(pkg.version, manifest.version);
+          assert.equal(lock.version, manifest.version);
+          assert.equal(versions[manifest.version], manifest.minAppVersion);
+          assert.match(manifest.id, /^[a-z]+(?:-[a-z]+)*$/);
+          JS
+      - name: Lint, test, and build
+        run: |
+          npm run lint
+          npm test
+          npm run build
+          git diff --exit-code -- main.js
+      - name: Attest release files
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-path: |
+            main.js
+            manifest.json
+            styles.css
+      - name: Publish verified artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" main.js manifest.json styles.css \
+            --verify-tag --title "$RELEASE_TAG — Encrypted Google Drive Sync" \
+            --generate-notes
