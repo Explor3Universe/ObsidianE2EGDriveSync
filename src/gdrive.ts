@@ -8,11 +8,9 @@ interface TokenResponse {
 }
 
 interface DriveListResponse {
-  files?: DriveFile[];
+  files: DriveFile[];
   nextPageToken?: string;
 }
-
-
 
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -45,31 +43,51 @@ export class GoogleDriveClient {
 
   async authorize(): Promise<void> {
     const http = await import('http');
+    const randomHex = (length: number) => Array.from(
+      crypto.getRandomValues(new Uint8Array(length)),
+      byte => byte.toString(16).padStart(2, '0')
+    ).join('');
+    const verifier = randomHex(32);
+    const state = randomHex(16);
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+    const challenge = btoa(String.fromCharCode(...new Uint8Array(digest)))
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
     return new Promise((resolve, reject) => {
-      let resolved = false;
+      let finished = false;
+      let exchanging = false;
+      let timer: ReturnType<typeof setTimeout>;
+      const finish = (error?: Error) => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        if (server.listening) server.close();
+        if (error) reject(error);
+        else resolve();
+      };
 
       const server = http.createServer((req, res) => {
-        if (resolved) return;
-        const requestUrl = req.url;
-        if (!requestUrl) {
+        if (finished || exchanging || !req.url) {
           res.writeHead(400, { 'Content-Type': 'text/plain' });
-          res.end('Missing URL');
+          res.end('Invalid request');
           return;
         }
 
         void (async () => {
           try {
-            const url = new URL(requestUrl, 'http://127.0.0.1');
+            const url = new URL(req.url!, 'http://127.0.0.1');
+            if (url.pathname !== '/' || url.searchParams.get('state') !== state) {
+              res.writeHead(400, { 'Content-Type': 'text/plain' });
+              res.end('Invalid OAuth state');
+              return;
+            }
             const code = url.searchParams.get('code');
             const error = url.searchParams.get('error');
 
             if (error) {
               res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
               res.end(this.authPage(`Error: ${error}`, false));
-              resolved = true;
-              server.close();
-              reject(new Error(`OAuth error: ${error}`));
+              finish(new Error(`OAuth error: ${error}`));
               return;
             }
 
@@ -79,8 +97,10 @@ export class GoogleDriveClient {
               return;
             }
 
+            exchanging = true;
             const port = (server.address() as { port: number }).port;
-            const tokens = await this.exchangeCode(code, `http://127.0.0.1:${port}`);
+            const tokens = await this.exchangeCode(code, `http://127.0.0.1:${port}`, verifier);
+            if (finished) return;
 
             await this.onTokenUpdate({
               googleAccessToken: tokens.access_token,
@@ -90,22 +110,19 @@ export class GoogleDriveClient {
 
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
             res.end(this.authPage('Authorization successful! You can close this tab.', true));
-            resolved = true;
-            server.close();
-            resolve();
+            finish();
           } catch (e: unknown) {
-            if (!resolved) {
+            if (!finished) {
               const message = e instanceof Error ? e.message : String(e);
               res.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
               res.end(this.authPage(`Error: ${message}`, false));
-              resolved = true;
-              server.close();
-              reject(e instanceof Error ? e : new Error(message));
+              finish(e instanceof Error ? e : new Error(message));
             }
           }
         })();
       });
 
+      server.on('error', (error) => finish(error));
       server.listen(0, '127.0.0.1', () => {
         const port = (server.address() as { port: number }).port;
         const params = new URLSearchParams({
@@ -115,18 +132,18 @@ export class GoogleDriveClient {
           scope: SCOPE,
           access_type: 'offline',
           prompt: 'consent',
+          state,
+          code_challenge: challenge,
+          code_challenge_method: 'S256',
         });
-        window.open(`${GOOGLE_AUTH_URL}?${params}`);
+        try {
+          window.open(`${GOOGLE_AUTH_URL}?${params}`);
+        } catch (error) {
+          finish(error instanceof Error ? error : new Error(String(error)));
+        }
       });
 
-      // Timeout after 5 minutes
-      setTimeout(() => {
-        if (!resolved) {
-          resolved = true;
-          server.close();
-          reject(new Error('OAuth timeout — no response within 5 minutes'));
-        }
-      }, 300000);
+      timer = setTimeout(() => finish(new Error('OAuth timeout — no response within 5 minutes')), 300000);
     });
   }
 
@@ -167,15 +184,24 @@ export class GoogleDriveClient {
   }
 
   private readDriveList(value: unknown): DriveListResponse {
-    if (!value || typeof value !== 'object') return {};
+    if (!value || typeof value !== 'object') throw new Error('Invalid Google Drive file listing');
     const data = value as Record<string, unknown>;
-    const files = Array.isArray(data.files)
-      ? data.files.filter((item): item is DriveFile => {
-          if (!item || typeof item !== 'object') return false;
-          const file = item as Record<string, unknown>;
-          return typeof file.id === 'string' && typeof file.name === 'string' && typeof file.mimeType === 'string';
-        })
-      : undefined;
+    if (!Array.isArray(data.files)) throw new Error('Invalid Google Drive file listing');
+    const files = data.files.map((item): DriveFile => {
+      if (!item || typeof item !== 'object') throw new Error('Invalid Google Drive file listing');
+      const file = item as Record<string, unknown>;
+      if (typeof file.id !== 'string' || typeof file.name !== 'string' || typeof file.mimeType !== 'string') {
+        throw new Error('Invalid Google Drive file listing');
+      }
+      return {
+        id: file.id,
+        name: file.name,
+        mimeType: file.mimeType,
+        modifiedTime: typeof file.modifiedTime === 'string' ? file.modifiedTime : undefined,
+        md5Checksum: typeof file.md5Checksum === 'string' ? file.md5Checksum : undefined,
+        size: typeof file.size === 'string' ? file.size : undefined,
+      };
+    });
     return {
       files,
       nextPageToken: typeof data.nextPageToken === 'string' ? data.nextPageToken : undefined,
@@ -211,7 +237,7 @@ export class GoogleDriveClient {
     return data.id;
   }
 
-  private async exchangeCode(code: string, redirectUri: string): Promise<TokenResponse> {
+  private async exchangeCode(code: string, redirectUri: string, verifier: string): Promise<TokenResponse> {
     const response = await requestUrl({
       url: GOOGLE_TOKEN_URL,
       method: 'POST',
@@ -222,6 +248,7 @@ export class GoogleDriveClient {
         client_secret: this.settings.googleClientSecret,
         redirect_uri: redirectUri,
         grant_type: 'authorization_code',
+        code_verifier: verifier,
       }).toString(),
     });
     return this.readToken(response.json);
@@ -233,7 +260,7 @@ export class GoogleDriveClient {
     if (!this.settings.googleRefreshToken) {
       throw new Error('Not authorized with Google Drive');
     }
-    if (Date.now() < this.settings.googleTokenExpiry - 60000) {
+    if (this.settings.googleAccessToken && Date.now() < this.settings.googleTokenExpiry - 60000) {
       return;
     }
     await this.refreshAccessToken();
@@ -268,17 +295,21 @@ export class GoogleDriveClient {
   async findOrCreateFolder(name: string, parentId?: string): Promise<string> {
     await this.ensureToken();
 
-    let q = `name = '${name.replace(/'/g, "\\'")}' and mimeType = '${FOLDER_MIME}' and trashed = false`;
-    if (parentId) q += ` and '${parentId}' in parents`;
+    const escapedName = name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const q = `name = '${escapedName}' and mimeType = '${FOLDER_MIME}' ` +
+      `and trashed = false and '${parentId || 'root'}' in parents`;
 
     const search = await requestUrl({
       url: `${DRIVE_API}/files?${new URLSearchParams({
-        q, fields: 'files(id)', pageSize: '1',
+        q, fields: 'files(id,name,mimeType)', pageSize: '2',
       })}`,
       headers: this.authHeaders,
     });
 
-    const found = this.readDriveList(search.json).files ?? [];
+    const found = this.readDriveList(search.json).files;
+    if (found.length > 1) {
+      throw new Error(`Multiple Google Drive folders named "${name}"; rename the duplicate before syncing`);
+    }
     if (found.length > 0) {
       return found[0].id;
     }
@@ -316,7 +347,7 @@ export class GoogleDriveClient {
       });
 
       const page = this.readDriveList(response.json);
-      if (page.files) files.push(...page.files);
+      files.push(...page.files);
       pageToken = page.nextPageToken || '';
     } while (pageToken);
 

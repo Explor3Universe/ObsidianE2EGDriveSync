@@ -1,11 +1,13 @@
 {
   "name": "e2e-gdrive-sync",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "E2E encrypted Google Drive sync for Obsidian",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
-    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "test": "node --test tests/*.test.cjs",
+    "lint": "eslint src"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

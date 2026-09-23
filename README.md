@@ -32,7 +32,7 @@ Each file is encrypted independently with a fresh IV. The master key never leave
 
 ## Installation
 
-### From Community Plugins (recommended)
+### From Community Plugins (once published in the app catalog)
 
 1. Open **Settings → Community plugins → Browse**.
 2. Search for **E2E Google Drive Sync**.
@@ -74,18 +74,20 @@ Open **Settings → E2E Google Drive Sync**:
 | New remote file | Download → decrypt |
 | Local file modified | Re-encrypt → upload |
 | Remote file modified | Download → re-decrypt |
-| File deleted locally | Delete from Google Drive |
-| File deleted remotely | Remove sync record |
-| Both sides modified | Create a conflict copy, upload local version |
+| File deleted locally | Restore from Google Drive (no automatic deletion) |
+| File deleted remotely | Re-upload local copy (no automatic deletion) |
+| Both sides modified or both exist without a previous sync record | Create a local conflict copy of the remote version, upload local version |
 
 Default exclusions: `.obsidian/`, `.trash/`, `.git/`. Additional patterns can be configured in settings.
+
+Deletion is intentionally not propagated: removing a file on one side restores it from the other. To remove a synced file permanently, delete it on every device and on Google Drive before syncing again. Back up your vault before the first sync. To decrypt an existing Drive backup on a second device, securely transfer the original plugin's key data (`keyData` in its `data.json`) and use the same Google Cloud OAuth client; a new password/key or an unrelated Google OAuth app cannot access the existing backup.
 
 ## Security
 
 - Encryption uses the **Web Crypto API** (`crypto.subtle`), not a custom implementation.
 - **AES-256-GCM** provides authenticated encryption — any tampering is detected.
 - The master key is wrapped (encrypted) with a key derived from your password. The raw master key is never written to disk.
-- The password can optionally be saved in plugin settings for auto-unlock. If you prefer, you can enter it manually each session.
+- By default the password is kept only for the current session. "Remember password" stores it in Obsidian's plugin data for auto-unlock; turn this on only if you accept that anyone with access to the vault configuration can read it.
 - Google Drive scope is `drive.file` — the plugin can only access files it created.
 
 ## Building from source

@@ -31,10 +31,9 @@ export interface DriveFile {
 }
 
 export interface SyncAction {
-  type: 'upload' | 'download' | 'deleteRemote' | 'deleteLocal' | 'conflict';
+  type: 'upload' | 'download' | 'conflict';
   localPath: string;
   remoteFile?: DriveFile;
-  record?: FileSyncRecord;
 }
 
 export interface PluginSettings {

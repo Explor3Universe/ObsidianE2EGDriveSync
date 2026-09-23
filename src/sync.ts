@@ -1,7 +1,7 @@
 import { TFile, Vault, Notice } from 'obsidian';
 import { CryptoService } from './crypto';
 import { GoogleDriveClient } from './gdrive';
-import { PluginSettings, FileSyncRecord, DriveFile, SyncAction } from './types';
+import { PluginSettings, DriveFile, SyncAction } from './types';
 
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
 
@@ -38,7 +38,6 @@ export class SyncEngine {
   async performSync(): Promise<{
     uploaded: number;
     downloaded: number;
-    deleted: number;
     conflicts: number;
   }> {
     if (this.syncing) throw new Error('Sync already in progress');
@@ -46,7 +45,7 @@ export class SyncEngine {
     if (!this.drive.isConfigured()) throw new Error('Google Drive not configured');
 
     this.syncing = true;
-    const stats = { uploaded: 0, downloaded: 0, deleted: 0, conflicts: 0 };
+    const stats = { uploaded: 0, downloaded: 0, conflicts: 0 };
 
     try {
       // Ensure root folder
@@ -60,6 +59,8 @@ export class SyncEngine {
       new Notice('Sync: scanning files...');
 
       const localFiles = this.getLocalFiles();
+      // Rebuild IDs from the actual remote tree, not a stale cache from a past run.
+      this.settings.folderCache = {};
       const remoteFiles = await this.buildRemoteFileMap(
         this.settings.driveFolderId, ''
       );
@@ -67,12 +68,15 @@ export class SyncEngine {
       const actions = await this.computeActions(localFiles, remoteFiles);
 
       if (actions.length === 0) {
+        // Touch-only mtime updates and the folder cache still need persistence.
+        await this.saveSettings();
         new Notice('Sync: everything is up to date');
         return stats;
       }
 
       const total = actions.length;
       let current = 0;
+      const failures: string[] = [];
 
       for (const action of actions) {
         current++;
@@ -80,7 +84,7 @@ export class SyncEngine {
           switch (action.type) {
             case 'upload':
               new Notice(`Upload (${current}/${total}): ${action.localPath}`);
-              await this.uploadFile(action.localPath);
+              await this.uploadFile(action.localPath, action.remoteFile);
               stats.uploaded++;
               break;
 
@@ -90,30 +94,26 @@ export class SyncEngine {
               stats.downloaded++;
               break;
 
-            case 'deleteRemote':
-              await this.deleteRemoteFile(action.localPath, action.record!);
-              stats.deleted++;
-              break;
-
-            case 'deleteLocal':
-              delete this.settings.syncState[action.localPath];
-              stats.deleted++;
-              break;
-
             case 'conflict':
               new Notice(`Conflict: ${action.localPath}`);
               await this.handleConflict(action.localPath, action.remoteFile!);
               stats.conflicts++;
               break;
           }
+          // Checkpoint after every successful file; a later failure cannot erase progress.
+          await this.saveSettings();
         } catch (e: unknown) {
           console.error(`Sync error for ${action.localPath}:`, e);
           const message = e instanceof Error ? e.message : String(e);
+          failures.push(`${action.localPath}: ${message}`);
           new Notice(`Error: ${action.localPath} — ${message}`);
         }
       }
 
       await this.saveSettings();
+      if (failures.length) {
+        throw new Error(`${failures.length} file(s) failed to sync: ${failures.join('; ')}`);
+      }
       return stats;
     } finally {
       this.syncing = false;
@@ -156,23 +156,33 @@ export class SyncEngine {
 
   private async buildRemoteFileMap(
     folderId: string,
-    basePath: string
+    basePath: string,
+    visited: Set<string> = new Set()
   ): Promise<Map<string, DriveFile>> {
+    if (visited.has(folderId)) throw new Error('Google Drive folder cycle detected');
+    visited.add(folderId);
     const result = new Map<string, DriveFile>();
     const children = await this.drive.listFiles(folderId);
 
     for (const child of children) {
+      if (!child.name || child.name === '.' || child.name === '..' || /[\\/]/.test(child.name)) {
+        throw new Error('Unsafe file name in Google Drive folder');
+      }
       const childPath = basePath ? `${basePath}/${child.name}` : child.name;
 
       if (child.mimeType === FOLDER_MIME) {
+        if (this.shouldExclude(`${childPath}/`)) continue;
         this.settings.folderCache[childPath] = child.id;
-        const subFiles = await this.buildRemoteFileMap(child.id, childPath);
+        const subFiles = await this.buildRemoteFileMap(child.id, childPath, visited);
         for (const [path, file] of subFiles) {
+          if (result.has(path)) throw new Error(`Duplicate remote path: ${path}`);
           result.set(path, file);
         }
       } else if (child.name.endsWith('.enc')) {
         const fileName = child.name.slice(0, -4);
         const filePath = basePath ? `${basePath}/${fileName}` : fileName;
+        if (!fileName || result.has(filePath)) throw new Error(`Duplicate or empty remote path: ${filePath}`);
+        if (this.shouldExclude(filePath)) continue;
         result.set(filePath, child);
       }
     }
@@ -197,15 +207,9 @@ export class SyncEngine {
 
       if (!record) {
         if (remote) {
-          // Both exist but never synced — compare timestamps
-          const remoteMtime = remote.modifiedTime
-            ? new Date(remote.modifiedTime).getTime()
-            : 0;
-          if (file.stat.mtime > remoteMtime) {
-            actions.push({ type: 'upload', localPath: path });
-          } else {
-            actions.push({ type: 'download', localPath: path, remoteFile: remote });
-          }
+          // Never choose a winner based on timestamps from different machines.
+          // Preserve the remote version as a conflict copy, then upload local.
+          actions.push({ type: 'conflict', localPath: path, remoteFile: remote });
         } else {
           actions.push({ type: 'upload', localPath: path });
         }
@@ -213,33 +217,32 @@ export class SyncEngine {
       }
 
       // Was synced before
-      const localChanged = file.stat.mtime !== record.localMtime;
-      const remoteChanged = remote ? remote.md5Checksum !== record.remoteChecksum : false;
+      if (!remote) {
+        // A missing remote file is not proof that the user intended deletion.
+        actions.push({ type: 'upload', localPath: path });
+        continue;
+      }
 
-      if (localChanged && remote && !remoteChanged) {
-        // Verify actual content change
-        const content = await this.vault.readBinary(file);
-        const hash = await this.crypto.hashContent(content);
-        if (hash !== record.contentHash) {
-          actions.push({ type: 'upload', localPath: path });
-        } else {
-          // Touch only — update mtime record
-          record.localMtime = file.stat.mtime;
-        }
-      } else if (!localChanged && remoteChanged && remote) {
+      if (remote.id !== record.driveFileId) {
+        // A replaced remote ID means another file took this path.
+        actions.push({ type: 'conflict', localPath: path, remoteFile: remote });
+        continue;
+      }
+      if (!remote.md5Checksum || !record.remoteChecksum) {
+        throw new Error(`Missing checksum for ${path}; refusing to overwrite either copy`);
+      }
+      const remoteChanged = remote.md5Checksum !== record.remoteChecksum;
+      // Timestamps can survive external edits or differ between machines.
+      const content = await this.vault.readBinary(file);
+      const hash = await this.crypto.hashContent(content);
+      const localChanged = hash !== record.contentHash;
+      if (!localChanged) record.localMtime = file.stat.mtime;
+      if (localChanged && remoteChanged) {
+        actions.push({ type: 'conflict', localPath: path, remoteFile: remote });
+      } else if (localChanged) {
+        actions.push({ type: 'upload', localPath: path, remoteFile: remote });
+      } else if (remoteChanged) {
         actions.push({ type: 'download', localPath: path, remoteFile: remote });
-      } else if (localChanged && remoteChanged && remote) {
-        // Possible conflict — verify local content actually changed
-        const content = await this.vault.readBinary(file);
-        const hash = await this.crypto.hashContent(content);
-        if (hash !== record.contentHash) {
-          actions.push({ type: 'conflict', localPath: path, remoteFile: remote });
-        } else {
-          actions.push({ type: 'download', localPath: path, remoteFile: remote });
-        }
-      } else if (!remote && record) {
-        // Deleted remotely
-        actions.push({ type: 'deleteLocal', localPath: path, record });
       }
     }
 
@@ -247,14 +250,9 @@ export class SyncEngine {
     for (const [path, remote] of remoteFiles) {
       if (processed.has(path)) continue;
 
-      const record = this.settings.syncState[path];
-      if (record) {
-        // Was synced but local file deleted
-        actions.push({ type: 'deleteRemote', localPath: path, record });
-      } else {
-        // New remote file
-        actions.push({ type: 'download', localPath: path, remoteFile: remote });
-      }
+      // Keep the remote even if it was previously synced locally. A temporarily
+      // missing local file must never cause irreversible remote deletion.
+      actions.push({ type: 'download', localPath: path, remoteFile: remote });
     }
 
     return actions;
@@ -262,22 +260,20 @@ export class SyncEngine {
 
   // --- File operations ---
 
-  private async uploadFile(localPath: string): Promise<void> {
+  private async uploadFile(localPath: string, remote?: DriveFile): Promise<void> {
     const file = this.vault.getFileByPath(localPath);
-    if (!file) return;
+    if (!file) throw new Error(`Local file disappeared: ${localPath}`);
 
     const content = await this.vault.readBinary(file);
     const encrypted = await this.crypto.encrypt(content);
     const contentHash = await this.crypto.hashContent(content);
 
     const folderId = await this.ensureRemoteFolders(localPath);
-    const existing = this.settings.syncState[localPath];
-
     const driveFile = await this.drive.uploadFile(
       file.name + '.enc',
       encrypted,
       folderId,
-      existing?.driveFileId
+      remote?.id
     );
 
     this.settings.syncState[localPath] = {
@@ -302,6 +298,11 @@ export class SyncEngine {
 
     const existing = this.vault.getFileByPath(localPath);
     if (existing) {
+      const record = this.settings.syncState[localPath];
+      const latest = await this.vault.readBinary(existing);
+      if (!record || await this.crypto.hashContent(latest) !== record.contentHash) {
+        throw new Error(`Local file changed while downloading; retry to preserve both versions: ${localPath}`);
+      }
       await this.vault.modifyBinary(existing, content);
     } else {
       await this.vault.createBinary(localPath, content);
@@ -319,18 +320,6 @@ export class SyncEngine {
     };
   }
 
-  private async deleteRemoteFile(
-    localPath: string,
-    record: FileSyncRecord
-  ): Promise<void> {
-    try {
-      await this.drive.deleteFile(record.driveFileId);
-    } catch (e) {
-      console.warn(`Could not delete remote ${localPath}:`, e);
-    }
-    delete this.settings.syncState[localPath];
-  }
-
   private async handleConflict(
     localPath: string,
     remote: DriveFile
@@ -339,12 +328,17 @@ export class SyncEngine {
     const encrypted = await this.drive.downloadFile(remote.id);
     const content = await this.crypto.decrypt(encrypted);
 
-    const dotIndex = localPath.lastIndexOf('.');
-    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const conflictPath =
-      dotIndex > 0
-        ? `${localPath.slice(0, dotIndex)} (conflict ${ts})${localPath.slice(dotIndex)}`
-        : `${localPath} (conflict ${ts})`;
+    const lastDot = localPath.lastIndexOf('.');
+    const lastSeparator = localPath.lastIndexOf('/');
+    const dotIndex = lastDot > lastSeparator + 1 ? lastDot : -1;
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const stem = dotIndex >= 0 ? localPath.slice(0, dotIndex) : localPath;
+    const extension = dotIndex >= 0 ? localPath.slice(dotIndex) : '';
+    let conflictPath = `${stem} (conflict ${ts})${extension}`;
+    let suffix = 2;
+    while (this.vault.getFileByPath(conflictPath)) {
+      conflictPath = `${stem} (conflict ${ts} ${suffix++})${extension}`;
+    }
 
     const lastSlash = conflictPath.lastIndexOf('/');
     if (lastSlash > 0) {
@@ -352,8 +346,8 @@ export class SyncEngine {
     }
     await this.vault.createBinary(conflictPath, content);
 
-    // Upload current local version as the canonical version
-    await this.uploadFile(localPath);
+    // Upload current local version to the existing remote ID (no duplicate).
+    await this.uploadFile(localPath, remote);
 
     new Notice(`Conflict resolved: created ${conflictPath}`);
   }

@@ -13,6 +13,7 @@ export default class E2EGDriveSyncPlugin extends Plugin {
 
   private autoSyncIntervalId: number | null = null;
   private statusBarEl: HTMLElement | null = null;
+  private sessionPassword = '';
 
   async onload() {
     await this.loadSettings();
@@ -38,6 +39,7 @@ export default class E2EGDriveSyncPlugin extends Plugin {
           this.settings.encryptionPassword,
           this.settings.keyData
         );
+        this.sessionPassword = this.settings.encryptionPassword;
       } catch {
         new Notice('Auto-unlock failed — check your password');
       }
@@ -93,6 +95,15 @@ export default class E2EGDriveSyncPlugin extends Plugin {
     this.driveClient?.updateSettings(this.settings);
   }
 
+  rememberSessionPassword(password: string): void {
+    this.sessionPassword = password;
+    if (this.settings.encryptionPassword) this.settings.encryptionPassword = password;
+  }
+
+  getSessionPassword(): string {
+    return this.sessionPassword;
+  }
+
   // ─── Sync ─────────────────────────────────────────────────
 
   async runSync() {
@@ -116,7 +127,6 @@ export default class E2EGDriveSyncPlugin extends Plugin {
       const parts: string[] = [];
       if (s.uploaded) parts.push(`uploaded ${s.uploaded}`);
       if (s.downloaded) parts.push(`downloaded ${s.downloaded}`);
-      if (s.deleted) parts.push(`deleted ${s.deleted}`);
       if (s.conflicts) parts.push(`conflicts ${s.conflicts}`);
       const msg = parts.length ? `Sync done: ${parts.join(', ')}` : 'Sync: up to date';
       new Notice(msg);

@@ -71,7 +71,7 @@ export class E2EGDriveSyncSettingTab extends PluginSettingTab {
           new Notice('Generating key (may take a few seconds)...');
           const keyData = await this.plugin.cryptoService.initializeKeyFile(pw);
           this.plugin.settings.keyData = keyData;
-          this.plugin.settings.encryptionPassword = pw;
+          this.plugin.rememberSessionPassword(pw);
           await this.plugin.saveSettings();
           new Notice('Encryption key created!');
           this.display();
@@ -103,7 +103,7 @@ export class E2EGDriveSyncSettingTab extends PluginSettingTab {
           btn.setButtonText('Unlock').setCta().onClick(async () => {
             try {
               await this.plugin.cryptoService.unlock(pw, this.plugin.settings.keyData!);
-              this.plugin.settings.encryptionPassword = pw;
+              this.plugin.rememberSessionPassword(pw);
               await this.plugin.saveSettings();
               new Notice('Master key unlocked!');
               this.display();
@@ -120,10 +120,13 @@ export class E2EGDriveSyncSettingTab extends PluginSettingTab {
       .setDesc('Save password for auto-unlock on startup. Less secure but convenient.')
       .addToggle(t =>
         t.setValue(!!this.plugin.settings.encryptionPassword).onChange(async v => {
-          if (!v) {
-            this.plugin.settings.encryptionPassword = '';
-            await this.plugin.saveSettings();
+          if (v && !this.plugin.getSessionPassword()) {
+            new Notice('Unlock the master key before remembering your password');
+            this.display();
+            return;
           }
+          this.plugin.settings.encryptionPassword = v ? this.plugin.getSessionPassword() : '';
+          await this.plugin.saveSettings();
         })
       );
 
@@ -172,7 +175,7 @@ export class E2EGDriveSyncSettingTab extends PluginSettingTab {
               oldPw, newPw, this.plugin.settings.keyData!
             );
             this.plugin.settings.keyData = keyData;
-            this.plugin.settings.encryptionPassword = newPw;
+            this.plugin.rememberSessionPassword(newPw);
             await this.plugin.saveSettings();
             new Notice('Password changed successfully!');
             this.display();
