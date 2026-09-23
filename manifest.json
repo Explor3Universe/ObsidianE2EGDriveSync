@@ -1,7 +1,7 @@
 {
-  "id": "e2e-gdrive-sync",
+  "id": "encrypted-gdrive-sync",
   "name": "E2E Google Drive Sync",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "minAppVersion": "1.5.0",
   "description": "Syncs your vault with Google Drive, encrypting all data with AES-256 before upload and storing keys exclusively on your device.",
   "author": "Nikita Sizikov",

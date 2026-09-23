@@ -41,9 +41,19 @@ Each file is encrypted independently with a fresh IV. The master key never leave
 ### Manual
 
 1. Download `main.js`, `manifest.json`, and `styles.css` from the [latest release](https://github.com/Explor3Universe/ObsidianE2EGDriveSync/releases/latest).
-2. Create a folder: `<your-vault>/.obsidian/plugins/e2e-gdrive-sync/`
+2. Create a folder: `<your-vault>/.obsidian/plugins/encrypted-gdrive-sync/` (use your vault's configured settings folder if it is not `.obsidian`).
 3. Place the three files inside it.
 4. Reload Obsidian and enable the plugin in **Settings → Community plugins**.
+
+### Upgrading a manually installed version 1.0.x
+
+Version 1.1.0 uses the directory-compliant ID `encrypted-gdrive-sync`. The display name and encrypted file format are unchanged.
+
+1. Disable the old plugin and close Obsidian.
+2. Back up the old `e2e-gdrive-sync` plugin folder, including its `data.json`.
+3. Install the new release in `encrypted-gdrive-sync` as described above.
+4. Copy the existing `data.json` to the new plugin folder. It contains your wrapped encryption key, Google authorization, and sync state. **Keep the original key data** to decrypt the existing backup.
+5. Reopen Obsidian and enable only the new installation. Unlock it using your existing password.
 
 ## Setup
 
