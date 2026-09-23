@@ -1,4 +1,4 @@
-# E2E Google Drive Sync
+# Encrypted Google Drive Sync
 
 Syncs your vault with Google Drive, encrypting all data with AES-256 before upload and storing keys exclusively on your device.
 
@@ -35,7 +35,7 @@ Each file is encrypted independently with a fresh IV. The master key never leave
 ### From Community Plugins (once published in the app catalog)
 
 1. Open **Settings → Community plugins → Browse**.
-2. Search for **E2E Google Drive Sync**.
+2. Search for **Encrypted Google Drive Sync**.
 3. Click **Install**, then **Enable**.
 
 ### Manual
@@ -47,7 +47,7 @@ Each file is encrypted independently with a fresh IV. The master key never leave
 
 ### Upgrading a manually installed version 1.0.x
 
-Version 1.1.0 uses the directory-compliant ID `encrypted-gdrive-sync`. The display name and encrypted file format are unchanged.
+Versions 1.1.x use the directory-compliant ID `encrypted-gdrive-sync`, and version 1.1.1 adopts the name **Encrypted Google Drive Sync**. The encrypted file format is unchanged.
 
 1. Disable the old plugin and close Obsidian.
 2. Back up the old `e2e-gdrive-sync` plugin folder, including its `data.json`.
@@ -70,7 +70,7 @@ Version 1.1.0 uses the directory-compliant ID `encrypted-gdrive-sync`. The displ
 
 ### 2. Configure the plugin
 
-Open **Settings → E2E Google Drive Sync**:
+Open **Settings → Encrypted Google Drive Sync**:
 
 1. **Encryption** — Set a password (minimum 8 characters). This generates your master encryption key.
 2. **Google Drive** — Paste the Client ID and Client Secret, then click **Connect Google Drive**. A browser window will open for authorization.

@@ -1,6 +1,6 @@
 {
   "name": "encrypted-gdrive-sync",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "E2E encrypted Google Drive sync for Obsidian",
   "main": "main.js",
   "scripts": {
