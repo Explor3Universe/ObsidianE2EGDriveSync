@@ -7,6 +7,13 @@ interface TokenResponse {
   expires_in: number;
 }
 
+interface DriveListResponse {
+  files?: DriveFile[];
+  nextPageToken?: string;
+}
+
+
+
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const DRIVE_API = 'https://www.googleapis.com/drive/v3';
@@ -37,10 +44,6 @@ export class GoogleDriveClient {
   // --- OAuth 2.0 with loopback redirect ---
 
   async authorize(): Promise<void> {
-    if (typeof require !== 'function') {
-      throw new Error('Google Drive authorization requires desktop Obsidian');
-    }
-
     const http = await import('http');
 
     return new Promise((resolve, reject) => {
@@ -127,16 +130,85 @@ export class GoogleDriveClient {
     });
   }
 
+  private escapeHtml(value: string): string {
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
   private authPage(message: string, success: boolean): string {
     const color = success ? '#4caf50' : '#f44336';
     const icon = success ? '&#10004;' : '&#10008;';
+    const safeMessage = this.escapeHtml(message);
     return `<!DOCTYPE html><html><head><meta charset="utf-8">
       <style>body{font-family:system-ui,sans-serif;display:flex;justify-content:center;
       align-items:center;min-height:100vh;margin:0;background:#1e1e1e;color:#fff}
       .card{text-align:center;padding:3em;border-radius:12px;background:#2d2d2d}
       .icon{font-size:3em;color:${color}}</style></head>
       <body><div class="card"><div class="icon">${icon}</div>
-      <h1>${message}</h1><p>Return to Obsidian.</p></div></body></html>`;
+      <h1>${safeMessage}</h1><p>Return to Obsidian.</p></div></body></html>`;
+  }
+
+  private readToken(value: unknown): TokenResponse {
+    if (!value || typeof value !== 'object') {
+      throw new Error('Invalid token response');
+    }
+    const data = value as Record<string, unknown>;
+    if (typeof data.access_token !== 'string' || typeof data.expires_in !== 'number') {
+      throw new Error('Invalid token response');
+    }
+    return {
+      access_token: data.access_token,
+      expires_in: data.expires_in,
+      refresh_token: typeof data.refresh_token === 'string' ? data.refresh_token : undefined,
+    };
+  }
+
+  private readDriveList(value: unknown): DriveListResponse {
+    if (!value || typeof value !== 'object') return {};
+    const data = value as Record<string, unknown>;
+    const files = Array.isArray(data.files)
+      ? data.files.filter((item): item is DriveFile => {
+          if (!item || typeof item !== 'object') return false;
+          const file = item as Record<string, unknown>;
+          return typeof file.id === 'string' && typeof file.name === 'string' && typeof file.mimeType === 'string';
+        })
+      : undefined;
+    return {
+      files,
+      nextPageToken: typeof data.nextPageToken === 'string' ? data.nextPageToken : undefined,
+    };
+  }
+
+  private readDriveFile(value: unknown): DriveFile {
+    if (!value || typeof value !== 'object') {
+      throw new Error('Invalid Google Drive response');
+    }
+    const data = value as Record<string, unknown>;
+    if (typeof data.id !== 'string' || typeof data.name !== 'string') {
+      throw new Error('Invalid Google Drive response');
+    }
+    return {
+      id: data.id,
+      name: data.name,
+      mimeType: typeof data.mimeType === 'string' ? data.mimeType : 'application/octet-stream',
+      modifiedTime: typeof data.modifiedTime === 'string' ? data.modifiedTime : undefined,
+      md5Checksum: typeof data.md5Checksum === 'string' ? data.md5Checksum : undefined,
+      size: typeof data.size === 'string' ? data.size : undefined,
+    };
+  }
+
+  private readDriveId(value: unknown): string {
+    if (!value || typeof value !== 'object') {
+      throw new Error('Invalid Google Drive response');
+    }
+    const data = value as Record<string, unknown>;
+    if (typeof data.id !== 'string') {
+      throw new Error('Invalid Google Drive response');
+    }
+    return data.id;
   }
 
   private async exchangeCode(code: string, redirectUri: string): Promise<TokenResponse> {
@@ -152,7 +224,7 @@ export class GoogleDriveClient {
         grant_type: 'authorization_code',
       }).toString(),
     });
-    return response.json;
+    return this.readToken(response.json);
   }
 
   // --- Token management ---
@@ -180,7 +252,7 @@ export class GoogleDriveClient {
       }).toString(),
     });
 
-    const data = response.json;
+    const data = this.readToken(response.json);
     await this.onTokenUpdate({
       googleAccessToken: data.access_token,
       googleTokenExpiry: Date.now() + data.expires_in * 1000,
@@ -206,8 +278,9 @@ export class GoogleDriveClient {
       headers: this.authHeaders,
     });
 
-    if (search.json.files?.length > 0) {
-      return search.json.files[0].id;
+    const found = this.readDriveList(search.json).files ?? [];
+    if (found.length > 0) {
+      return found[0].id;
     }
 
     const metadata: { name: string; mimeType: string; parents?: string[] } = { name, mimeType: FOLDER_MIME };
@@ -220,7 +293,7 @@ export class GoogleDriveClient {
       body: JSON.stringify(metadata),
     });
 
-    return create.json.id;
+    return this.readDriveId(create.json);
   }
 
   async listFiles(folderId: string): Promise<DriveFile[]> {
@@ -242,8 +315,9 @@ export class GoogleDriveClient {
         headers: this.authHeaders,
       });
 
-      if (response.json.files) files.push(...response.json.files);
-      pageToken = response.json.nextPageToken || '';
+      const page = this.readDriveList(response.json);
+      if (page.files) files.push(...page.files);
+      pageToken = page.nextPageToken || '';
     } while (pageToken);
 
     return files;
@@ -272,7 +346,7 @@ export class GoogleDriveClient {
         },
         body: body,
       });
-      return response.json;
+      return this.readDriveFile(response.json);
     } else {
       // Create new file
       const body = this.buildMultipartBody(boundary, { name, parents: [folderId] }, data);
@@ -285,7 +359,7 @@ export class GoogleDriveClient {
         },
         body: body,
       });
-      return response.json;
+      return this.readDriveFile(response.json);
     }
   }
 

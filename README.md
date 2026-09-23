@@ -2,6 +2,8 @@
 
 Syncs your vault with Google Drive, encrypting all data with AES-256 before upload and storing keys exclusively on your device.
 
+This plugin needs your own Google account and a Google Cloud OAuth client. It sends authorization and encrypted file data only to Google (`accounts.google.com`, `oauth2.googleapis.com`, and `www.googleapis.com`). It does not upload your vault to any other server.
+
 ## Features
 
 - **End-to-end encryption** — AES-256-GCM via Web Crypto API. Files are encrypted before leaving your machine.
@@ -38,7 +40,7 @@ Each file is encrypted independently with a fresh IV. The master key never leave
 
 ### Manual
 
-1. Download `main.js`, `manifest.json`, and `styles.css` from the [latest release](https://github.com/Puerh0x1/ObsidianE2EGDriveSync/releases/latest).
+1. Download `main.js`, `manifest.json`, and `styles.css` from the [latest release](https://github.com/Explor3Universe/ObsidianE2EGDriveSync/releases/latest).
 2. Create a folder: `<your-vault>/.obsidian/plugins/e2e-gdrive-sync/`
 3. Place the three files inside it.
 4. Reload Obsidian and enable the plugin in **Settings → Community plugins**.

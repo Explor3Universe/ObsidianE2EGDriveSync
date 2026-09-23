@@ -80,8 +80,8 @@ export default class E2EGDriveSyncPlugin extends Plugin {
   }
 
   async loadSettings() {
-    const loaded = await this.loadData();
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, loaded);
+    const loaded = await this.loadData() as Partial<PluginSettings> | null;
+    this.settings = { ...DEFAULT_SETTINGS, ...(loaded ?? {}) };
     if (!this.settings.syncState) this.settings.syncState = {};
     if (!this.settings.folderCache) this.settings.folderCache = {};
     if (!this.settings.excludePatterns) this.settings.excludePatterns = [];
